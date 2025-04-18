@@ -123,24 +123,64 @@ helm create my-app-chart
 `values.yaml` を以下のように編集：
 
 ```yaml
+# container-nodejs-api-chart/values.yaml
+
 replicaCount: 1
+
 image:
   repository: 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8000
-  tag: latest
+  tag: "latest"
   pullPolicy: Always
 
+########################################
+# Ingress (無効化)
+########################################
+ingress:
+  enabled: false         # <= ここがポイント
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+########################################
+# ServiceAccount (無効化)
+########################################
+serviceAccount:
+  create: false          # <= ここがポイント
+  name: ""
+  annotations: {}
+
+########################################
+# HPA / Autoscaling (無効化)
+########################################
+autoscaling:
+  enabled: false         # <= ここがポイント
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+########################################
+# Service設定
+########################################
 service:
   type: ClusterIP
-  port: 8000
+  port: 8080
 
-containerPort: 8000
+########################################
+# コンテナポート
+########################################
+containerPort: 8080
 
-ingress:
-  enabled: false
-autoscaling:
-  enabled: false
-serviceAccount:
-  create: false
+########################################
+# リソース設定 (例)
+########################################
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
 ```
 
 ---
