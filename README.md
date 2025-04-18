@@ -251,6 +251,111 @@ helm uninstall container-api
 
 ---
 
+おっしゃる通り、README に **Argo CD の導入手順** が記述されていないようですね。GitOps を前提とするチュートリアルであれば、本来**Argo CD のセットアップ手順**が明確に記載されているべきです。  
+以下に、既存の流れと整合性を保ちつつ、**「章立て11. ECR へのイメージPushと GitOps による Helm 自動アップデート」**の前後に組み込むべき Argo CD 導入手順を提案いたします。
+
+---
+
+## ✅ 差し込み候補：10.5 Argo CD の導入とセットアップ（GitOps 実践前提）
+
+```md
+### 10.5 Argo CD の導入とセットアップ（GitOps 実践前提）
+
+GitOps 運用の前提として、Argo CD を Kind クラスタに導入します。
+
+#### ステップ 1：Argo CD のインストール（公式マニフェスト）
+
+```bash
+kubectl create namespace argocd
+
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+#### ステップ 2：Argo CD サーバーへのアクセス（port-forward）
+
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8083:443
+```
+
+ブラウザで `https://localhost:8083` を開きます（自己署名証明書の警告あり）。
+
+#### ステップ 3：初期パスワードの取得
+
+```bash
+kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d && echo
+```
+
+初期ユーザー名は `admin` です。
+
+---
+
+#### ステップ 4：Argo CD CLI（任意）
+
+ローカル環境でも CLI を使いたい場合は、以下の通り：
+
+```bash
+VERSION=$(curl --silent "https://api.github.com/repos/argoproj/argo-cd/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+curl -sSL -o argocd "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64"
+chmod +x argocd
+sudo mv argocd /usr/local/bin/
+```
+
+---
+
+#### ステップ 5：アプリケーション定義の登録
+
+以下のようなマニフェストで GitHub 上の Helm Chart を Argo CD に登録します。
+
+`argocd-app.yaml`（例）：
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: container-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kurosawa-kuro/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git
+    targetRevision: HEAD
+    path: my-app-chart
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+```
+
+適用：
+
+```bash
+kubectl apply -f argocd-app.yaml
+```
+
+---
+
+これで、Git に Push すれば Argo CD 経由で自動反映される GitOps サイクルが完成します。
+```
+
+---
+
+### 🔁 README に追記すべき場所（ご提案）
+
+| 章番号 | 現在の項目 | 追記提案 |
+|--------|------------|-----------|
+| `10`   | まとめ       | `10.5 Argo CD の導入` を `11 ECR Push〜GitOps` の前に差し込む |
+
+---
+
+もしご希望であれば、**Markdown形式でそのままコピペ可能なフルセクション**を作成し、PR用に整えた形でも提供できます。  
+ご要望ありましたらお申し付けくださいませ 🙌
+
 ### 11. ECR へのイメージPushと GitOps による Helm 自動アップデート
 
 1. **Dockerイメージをビルド**  
