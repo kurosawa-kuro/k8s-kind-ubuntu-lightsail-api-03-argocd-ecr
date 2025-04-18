@@ -71,14 +71,14 @@ kubectl apply -n argocd -f \
   https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 # ローカル UI 用 port‑forward
-kubectl port-forward svc/argocd-server -n argocd 8083:443 &
+kubectl port-forward svc/argocd-server -n argocd 8080:443 &
 
 # 初期パスワード
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d; echo
 ```
 
-**ログイン URL** : <https://localhost:8083> （ユーザー名 `admin`）
+**ログイン URL** : <https://localhost:8080> （ユーザー名 `admin`）
 
 > **Point** — ログイン後すぐに **SSH Key** を登録（Settings › Repositories）しておくと認証系トラブルが激減します。
 
