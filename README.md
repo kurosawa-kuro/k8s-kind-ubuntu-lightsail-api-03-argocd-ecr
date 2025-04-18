@@ -69,7 +69,7 @@ cd ~/dev/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr
 ```bash
 export REGION=ap-northeast-1
 export ACCOUNT_ID=986154984217
-export ECR_REPO=container-nodejs-api-8080
+export ECR_REPO=container-nodejs-api-8000
 export ECR_TOKEN=$(aws ecr get-login-password --region $REGION)
 
 cat <<EOF > kind-cluster.yaml
@@ -125,7 +125,7 @@ helm create my-app-chart
 ```yaml
 replicaCount: 1
 image:
-  repository: 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8080
+  repository: 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8000
   tag: latest
   pullPolicy: Always
 
