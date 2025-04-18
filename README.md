@@ -58,26 +58,9 @@ kind create cluster --config kind-cluster.yaml
 kubectl cluster-info
 ```
 
-## 2. Ingressコントローラーのセットアップ
+## 2. AWS ECRとの連携
 
-### 2.1 Ingress-nginxのインストール
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-```
-
-### 2.2 Ingressコントローラーの準備完了を待つ
-
-```bash
-kubectl wait --namespace ingress-nginx \
-  --for=condition=ready pod \
-  --selector=app.kubernetes.io/component=controller \
-  --timeout=120s
-```
-
-## 3. AWS ECRとの連携
-
-### 3.1 ECR認証情報の設定
+### 2.1 ECR認証情報の設定
 
 ```bash
 # AWS認証情報の設定
@@ -94,9 +77,9 @@ kubectl create secret docker-registry ecr-secret \
   --namespace=default
 ```
 
-## 4. Helmチャートの作成とデプロイ
+## 3. Helmチャートの作成とデプロイ
 
-### 4.1 Helmチャートの作成
+### 3.1 Helmチャートの作成
 
 ```bash
 # チャートの作成
@@ -106,7 +89,7 @@ helm create my-app-chart
 cd my-app-chart
 ```
 
-### 4.2 values.yamlの編集
+### 3.2 values.yamlの編集
 
 ```bash
 # values.yamlを編集
@@ -138,28 +121,28 @@ imagePullSecrets:
 EOF
 ```
 
-### 4.3 チャートのテンプレート確認
+### 3.3 チャートのテンプレート確認
 
 ```bash
 helm template . --values values.yaml
 ```
 
-### 4.4 チャートのインストール
+### 3.4 チャートのインストール
 
 ```bash
 helm install container-api . --values values.yaml
 ```
 
-### 4.5 デプロイの確認
+### 3.5 デプロイの確認
 
 ```bash
 kubectl get pods
 kubectl get svc
 ```
 
-## 5. ArgoCDのセットアップ
+## 4. ArgoCDのセットアップ
 
-### 5.1 ArgoCDのインストール
+### 4.1 ArgoCDのインストール
 
 ```bash
 # ArgoCD名前空間の作成
@@ -172,7 +155,7 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
 ```
 
-### 5.2 ArgoCDへのアクセス
+### 4.2 ArgoCDへのアクセス
 
 ```bash
 # ArgoCDサーバーのポートフォワード
@@ -185,24 +168,24 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-### 5.3 GitHubリポジトリの準備
+### 4.3 GitHubリポジトリの準備
 
 ```bash
 # 現在のディレクトリをGitリポジトリとして初期化
 git init
 
-# リモートリポジトリを追加（実際のGitHubリポジトリURLに置き換えてください）
-git remote add origin https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git
+# リモートリポジトリを追加
+git remote add origin https://github.com/kurosawa-kuro/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git
 
 # 変更をコミット
 git add .
 git commit -m "Initial commit"
 
 # リモートリポジトリにプッシュ
-git push -u origin main
+git push -u origin development
 ```
 
-### 5.4 GitHub認証情報の設定
+### 4.4 GitHub認証情報の設定
 
 ```bash
 # GitHubのパーソナルアクセストークンを取得
@@ -210,33 +193,55 @@ git push -u origin main
 # 必要な権限: repo, workflow
 
 # ArgoCDにGitHubリポジトリを追加
-argocd repo add https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git \
-  --username yourusername \
+argocd repo add https://github.com/kurosawa-kuro/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git \
+  --username kurosawa-kuro \
   --password your-github-token
 ```
 
-### 5.5 アプリケーションの登録
+### 4.5 Application YAMLの作成
 
 ```bash
-# ArgoCD CLIのインストール
-curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
-rm argocd-linux-amd64
+# Application YAMLファイルの作成
+cat <<EOF > argocd-application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: container-api         # Argo CD 上での Application 名
+  namespace: argocd           # Argo CD がインストールされているネームスペース
+spec:
+  project: default
 
-# ArgoCDにログイン
-argocd login localhost:8080
+  source:
+    repoURL: 'https://github.com/kurosawa-kuro/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git'
+    targetRevision: development        # Git のブランチやタグ、コミットハッシュなど
+    path: my-app-chart                 # Chart が存在するディレクトリ
+    helm:
+      releaseName: container-api       # helm install 時のリリース名
+      valueFiles:
+        - values.yaml                  # values ファイルのパス
 
-# アプリケーションの登録（実際のGitHubリポジトリURLに置き換えてください）
-argocd app create my-app \
-  --repo https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git \
-  --path my-app-chart \
-  --dest-server https://kubernetes.default.svc \
-  --dest-namespace default
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: default                 # デプロイ先の Namespace
+
+  syncPolicy:
+    # 自動同期(プル)を有効化する場合
+    automated:
+      prune: true       # 差分があれば不要リソースを削除
+      selfHeal: true    # 手動変更されたリソースを元に戻す
+EOF
 ```
 
-## 6. トラブルシューティング
+### 4.6 アプリケーションの登録
 
-### 6.1 イメージプルエラー
+```bash
+# Applicationリソースの適用
+kubectl apply -f argocd-application.yaml
+```
+
+## 5. トラブルシューティング
+
+### 5.1 イメージプルエラー
 
 ```bash
 # イメージプルエラーの確認
@@ -246,21 +251,14 @@ kubectl describe pod <pod-name>
 kubectl get secret ecr-secret -o yaml
 ```
 
-### 6.2 Ingressエラー
-
-```bash
-# Ingressコントローラーのログ確認
-kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller
-```
-
-### 6.3 ArgoCDエラー
+### 5.2 ArgoCDエラー
 
 ```bash
 # ArgoCDアプリケーションの状態確認
-argocd app get my-app
+kubectl get application -n argocd
 
-# ArgoCDアプリケーションのログ確認
-argocd app logs my-app
+# ArgoCDアプリケーションの詳細確認
+kubectl describe application container-api -n argocd
 
 # GitHubリポジトリへのアクセスエラー
 # 1. GitHubのパーソナルアクセストークンが正しいか確認
@@ -269,16 +267,13 @@ argocd app logs my-app
 argocd repo list
 ```
 
-## 7. クリーンアップ
+## 6. クリーンアップ
 
-### 7.1 リソースの削除
+### 6.1 リソースの削除
 
 ```bash
-# Helmリリースの削除
-helm uninstall container-api
-
 # ArgoCDアプリケーションの削除
-argocd app delete my-app
+kubectl delete -f argocd-application.yaml
 
 # ArgoCDの削除
 kubectl delete -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
@@ -288,7 +283,7 @@ kubectl delete namespace argocd
 kind delete cluster
 ```
 
-## 8. 参考リソース
+## 7. 参考リソース
 
 - [Kind公式ドキュメント](https://kind.sigs.k8s.io/docs/)
 - [Helm公式ドキュメント](https://helm.sh/docs/)
