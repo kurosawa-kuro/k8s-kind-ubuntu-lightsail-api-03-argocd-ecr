@@ -40,6 +40,11 @@ cd       ~/dev/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr
 
 ## 3️⃣ Kind クラスタ（ECR 認証付き）
 
+```
+helm uninstall container-api
+kind delete cluster
+```
+
 ```bash
 export REGION=ap-northeast-1 ACCOUNT_ID=986154984217
 export ECR_REPO=container-nodejs-api-8080
