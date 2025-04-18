@@ -50,17 +50,18 @@ export REGION=ap-northeast-1 ACCOUNT_ID=986154984217
 export ECR_REPO=container-nodejs-api-8080
 export ECR_TOKEN=$(aws ecr get-login-password --region $REGION)
 
-cat <<'EOF' > kind-cluster.yaml
+cat <<EOF > kind-cluster.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
-    containerdConfigPatches:
-      - |-
-        [plugins."io.containerd.grpc.v1.cri".registry]
-          [plugins."io.containerd.grpc.v1.cri".registry.auths."${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"]
-            username = "AWS"
-            password = "${ECR_TOKEN}"
+    extraMounts: []
+    kubeadmConfigPatches: []
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.auths."${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"]
+      username = "AWS"
+      password = "${ECR_TOKEN}"
 EOF
 
 kind create cluster --config <(envsubst < kind-cluster.yaml)
