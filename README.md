@@ -131,7 +131,9 @@ image:
 
 service:
   type: ClusterIP
-  port: 8080
+  port: 8000
+
+containerPort: 8000
 
 ingress:
   enabled: false
@@ -148,7 +150,7 @@ serviceAccount:
 ```bash
 helm install container-api ./my-app-chart -f values.yaml
 kubectl get pods
-kubectl port-forward svc/container-api-my-app-chart -n default 8081:8080
+kubectl port-forward svc/container-api-my-app-chart -n default 8081:8000
 ```
 
 → `curl http://localhost:8081` でアプリ動作確認
