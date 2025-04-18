@@ -1,265 +1,298 @@
-# Helm + Kind + Argo CD GitOps チュートリアル（ECR 対応・最小構成）
+# Kubernetes環境構築チュートリアル
 
-> **目的** — Lightsail/EC2 上の Kind クラスタに AWS ECR のイメージを Pull し、Helm でデプロイしたアプリを **Argo CD** により GitOps で自動管理する構成を、実用最小限で構築します。
+このチュートリアルでは、以下の内容を学びます：
 
----
+1. Kindを使用したローカルKubernetesクラスターの構築
+2. Helmを使用したアプリケーションのデプロイ
+3. ArgoCDを使用したGitOps実践
+4. AWS ECRとの連携
 
-## ✅ 本チュートリアルの前提
+## 前提条件
 
-- Lightsail または EC2 上の Ubuntu に VSCode Remote SSH で接続している
-- Docker / Kind / kubectl / helm / AWS CLI がインストール済み
-- GitHub リポジトリを所有しており、Helm Chart を管理可能
+- Docker
+- kubectl
+- Helm
+- AWS CLI
+- Kind
+- GitHubアカウントとリポジトリ
 
----
+## 1. Kindクラスターの構築
 
-## 0️⃣ 事前チェック（30秒で完了）
-
-| ✔︎ | チェック項目 | コマンド | 説明 |
-|----|---------------|----------|------|
-|    | AWS CLI       | `aws sts get-caller-identity` | IAM 認証確認 |
-|    | Docker        | `docker info | grep "Default Runtime"` | rootless ではないこと |
-|    | Kind           | `kind version` ≥ 0.23        | containerd 認証設定対応バージョン |
-|    | kubectl       | `kubectl version --client`   | v1.30.x 以上推奨 |
-|    | GitHub Token  | `echo $GH_TOKEN`             | Argo CD の repo 認証に使用 |
-|    | ポート競合なし| `lsof -i:8080`               | Argo CD UI 用ポートが空いている |
-
----
-
-## 🧠 Argo CD の Web UI をローカルブラウザから使う方法
-
-### ✅ VSCode Remote SSH の場合（推奨構成）
-
-- VSCode Remote SSH 経由で EC2 に接続し、VSCode ターミナルで以下を実行するだけ：
+### 1.1 クラスター設定ファイルの作成
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
-```
-
-- その状態でローカルPCのブラウザから `https://localhost:8080` にアクセスすれば、Argo CD UI に接続できます。
-- VSCode が裏で自動的に SSH トンネルを張ってくれているため、**追加の設定は不要です**。
-
-### ✅ ターミナルのみの場合（ssh -L を明示的に使う）
-
-```bash
-ssh -i ~/.ssh/your-key.pem -L 8080:localhost:8080 ubuntu@<EC2 Public IP>
-```
-
-- これでローカルの 8080 ポートが EC2 内部の 8080 にトンネル接続されます。
-- EC2 側では次のコマンドを実行：
-
-```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
-```
-
-その上で、ブラウザから `https://localhost:8080` へアクセスしてください。
-
----
-
-## 1️⃣ プロジェクト初期化
-
-```bash
-mkdir -p ~/dev/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr
-cd ~/dev/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr
-```
-
----
-
-## 2️⃣ Kind クラスタ作成（ECR Pull 対応）
-
-```bash
-export REGION=ap-northeast-1
-export ACCOUNT_ID=986154984217
-export ECR_REPO=container-nodejs-api-8000
-export ECR_TOKEN=$(aws ecr get-login-password --region $REGION)
-
 cat <<EOF > kind-cluster.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
-  - role: control-plane
-containerdConfigPatches:
-  - |-
-    [plugins."io.containerd.grpc.v1.cri".registry.auths."${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"]
-      username = "AWS"
-      password = "${ECR_TOKEN}"
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        system-reserved: memory=2Gi
+        eviction-hard: memory.available<500Mi
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 80
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 443
+    protocol: TCP
+  - containerPort: 30000
+    hostPort: 30000
+    protocol: TCP
 EOF
-
-kind create cluster --config <(envsubst < kind-cluster.yaml)
 ```
 
----
-
-## 3️⃣ Argo CD のインストールと初期化
+### 1.2 クラスターの作成
 
 ```bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f \
-  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
-kubectl get pods -n argocd
+kind create cluster --config kind-cluster.yaml
 ```
 
-Argo CD の UI にアクセスするには：
+### 1.3 クラスターの確認
 
 ```bash
-kubectl port-forward svc/argocd-server -n argocd 8080:443
+kubectl cluster-info
 ```
 
-ログイン用パスワード取得：
+## 2. Ingressコントローラーのセットアップ
+
+### 2.1 Ingress-nginxのインストール
 
 ```bash
-kubectl get secret argocd-initial-admin-secret -n argocd \
-  -o jsonpath="{.data.password}" | base64 -d && echo
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
 ```
 
----
-
-## 4️⃣ Helm Chart の雛形作成
+### 2.2 Ingressコントローラーの準備完了を待つ
 
 ```bash
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=120s
+```
+
+## 3. AWS ECRとの連携
+
+### 3.1 ECR認証情報の設定
+
+```bash
+# AWS認証情報の設定
+aws configure
+
+# ECRレジストリのログイン
+aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com
+
+# Kubernetesシークレットの作成
+kubectl create secret docker-registry ecr-secret \
+  --docker-server=986154984217.dkr.ecr.ap-northeast-1.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password=$(aws ecr get-login-password --region ap-northeast-1) \
+  --namespace=default
+```
+
+## 4. Helmチャートの作成とデプロイ
+
+### 4.1 Helmチャートの作成
+
+```bash
+# チャートの作成
 helm create my-app-chart
+
+# チャートディレクトリに移動
+cd my-app-chart
 ```
 
-`values.yaml` を以下のように編集：
+### 4.2 values.yamlの編集
 
-```yaml
-# container-nodejs-api-chart/values.yaml
-
+```bash
+# values.yamlを編集
+cat <<EOF > values.yaml
 replicaCount: 1
 
 image:
   repository: 986154984217.dkr.ecr.ap-northeast-1.amazonaws.com/container-nodejs-api-8000
-  tag: "latest"
+  tag: latest
   pullPolicy: Always
 
-########################################
-# Ingress (無効化)
-########################################
-ingress:
-  enabled: false         # <= ここがポイント
-  className: ""
-  annotations: {}
-  hosts: []
-  tls: []
+nameOverride: ""
+fullnameOverride: ""
 
-########################################
-# ServiceAccount (無効化)
-########################################
-serviceAccount:
-  create: false          # <= ここがポイント
-  name: ""
-  annotations: {}
-
-########################################
-# HPA / Autoscaling (無効化)
-########################################
-autoscaling:
-  enabled: false         # <= ここがポイント
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 80
-
-########################################
-# Service設定
-########################################
 service:
   type: ClusterIP
   port: 8080
 
-########################################
-# コンテナポート
-########################################
-containerPort: 8080
-
-########################################
-# リソース設定 (例)
-########################################
 resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
   limits:
     cpu: 200m
     memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+imagePullSecrets:
+  - name: ecr-secret
+EOF
 ```
 
----
-
-## 5️⃣ Helm デプロイと動作確認
+### 4.3 チャートのテンプレート確認
 
 ```bash
-helm install container-api ./my-app-chart -f values.yaml
+helm template . --values values.yaml
+```
+
+### 4.4 チャートのインストール
+
+```bash
+helm install container-api . --values values.yaml
+```
+
+### 4.5 デプロイの確認
+
+```bash
 kubectl get pods
-kubectl port-forward svc/container-api-my-app-chart -n default 8081:8000
+kubectl get svc
 ```
 
-→ `curl http://localhost:8081` でアプリ動作確認
+## 5. ArgoCDのセットアップ
 
----
-
-## 6️⃣ Argo CD に Helm Chart を登録（GitOps）
-
-```yaml
-# argocd-app.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: container-api
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/kurosawa-kuro/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git
-    targetRevision: HEAD
-    path: my-app-chart
-    helm:
-      valueFiles:
-        - values.yaml
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  syncPolicy:
-    automated:
-      selfHeal: true
-      prune: true
-```
+### 5.1 ArgoCDのインストール
 
 ```bash
-kubectl apply -f argocd-app.yaml
+# ArgoCD名前空間の作成
+kubectl create namespace argocd
+
+# ArgoCDのインストール
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# ArgoCDサーバーの準備完了を待つ
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
 ```
 
-Argo CD ダッシュボードにアプリが表示されていれば成功です。
+### 5.2 ArgoCDへのアクセス
 
----
-
-## 7️⃣ GitOps による自動更新テスト
-
-### レプリカ数を変更：
 ```bash
-sed -i 's/replicaCount: 1/replicaCount: 2/' my-app-chart/values.yaml
-git commit -am "scale: replicaCount 2"
-git push origin main
+# ArgoCDサーバーのポートフォワード
+kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
-### イメージタグを変更して再デプロイ：
+ブラウザで https://localhost:8080 にアクセスし、初期パスワードを取得：
+
 ```bash
-TAG=v2
-docker build -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO:$TAG .
-docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO:$TAG
-
-# values.yaml を更新
-sed -i "s/tag: .*/tag: $TAG/" my-app-chart/values.yaml
-git commit -am "update image tag to $TAG"
-git push origin main
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
----
+### 5.3 GitHubリポジトリの準備
 
-## 🔚 完了と次のステップ
+```bash
+# 現在のディレクトリをGitリポジトリとして初期化
+git init
 
-- GitHub Actions による CI → ECR 自動 Push
-- Argo CD アプリのマルチ環境管理（dev / prod）
-- Ingress 有効化、HPA 実装、ApplicationSet 利用
+# リモートリポジトリを追加（実際のGitHubリポジトリURLに置き換えてください）
+git remote add origin https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git
 
-お疲れさまでした 🎉
+# 変更をコミット
+git add .
+git commit -m "Initial commit"
+
+# リモートリポジトリにプッシュ
+git push -u origin main
+```
+
+### 5.4 GitHub認証情報の設定
+
+```bash
+# GitHubのパーソナルアクセストークンを取得
+# GitHubの設定 > Developer settings > Personal access tokens > Tokens (classic) > Generate new token
+# 必要な権限: repo, workflow
+
+# ArgoCDにGitHubリポジトリを追加
+argocd repo add https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git \
+  --username yourusername \
+  --password your-github-token
+```
+
+### 5.5 アプリケーションの登録
+
+```bash
+# ArgoCD CLIのインストール
+curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+rm argocd-linux-amd64
+
+# ArgoCDにログイン
+argocd login localhost:8080
+
+# アプリケーションの登録（実際のGitHubリポジトリURLに置き換えてください）
+argocd app create my-app \
+  --repo https://github.com/yourusername/k8s-kind-ubuntu-lightsail-api-03-argocd-ecr.git \
+  --path my-app-chart \
+  --dest-server https://kubernetes.default.svc \
+  --dest-namespace default
+```
+
+## 6. トラブルシューティング
+
+### 6.1 イメージプルエラー
+
+```bash
+# イメージプルエラーの確認
+kubectl describe pod <pod-name>
+
+# ECRシークレットの確認
+kubectl get secret ecr-secret -o yaml
+```
+
+### 6.2 Ingressエラー
+
+```bash
+# Ingressコントローラーのログ確認
+kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller
+```
+
+### 6.3 ArgoCDエラー
+
+```bash
+# ArgoCDアプリケーションの状態確認
+argocd app get my-app
+
+# ArgoCDアプリケーションのログ確認
+argocd app logs my-app
+
+# GitHubリポジトリへのアクセスエラー
+# 1. GitHubのパーソナルアクセストークンが正しいか確認
+# 2. リポジトリが存在し、アクセス権限があるか確認
+# 3. ArgoCDのリポジトリ設定を確認
+argocd repo list
+```
+
+## 7. クリーンアップ
+
+### 7.1 リソースの削除
+
+```bash
+# Helmリリースの削除
+helm uninstall container-api
+
+# ArgoCDアプリケーションの削除
+argocd app delete my-app
+
+# ArgoCDの削除
+kubectl delete -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl delete namespace argocd
+
+# Kindクラスターの削除
+kind delete cluster
+```
+
+## 8. 参考リソース
+
+- [Kind公式ドキュメント](https://kind.sigs.k8s.io/docs/)
+- [Helm公式ドキュメント](https://helm.sh/docs/)
+- [ArgoCD公式ドキュメント](https://argo-cd.readthedocs.io/)
+- [AWS ECR公式ドキュメント](https://docs.aws.amazon.com/ecr/)
+- [GitHub Personal Access Tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
 
